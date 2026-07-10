@@ -16,6 +16,7 @@ jobs:
       - id: set-matrix
         run: |
           echo "packages=$(npm query .workspace | jq -c '[.[].location]')" >> "$GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"
 
   check:
     name: Typecheck & Test
