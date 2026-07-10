@@ -20,13 +20,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { SanitizedInput } from '@/components/ui/sanitized-input'
-import type { HermesGitBranch } from '@/global'
+import type { HermesGitBaseBranch, HermesGitBranch } from '@/global'
 import { useI18n } from '@/i18n'
 import { gitRef } from '@/lib/sanitize'
 import { cn } from '@/lib/utils'
 import { notifyError } from '@/store/notifications'
-import { copyPath, listRepoBranches, revealPath, startWorkInRepo, switchBranchInRepo } from '@/store/projects'
+import { copyPath, listBaseBranches, listRepoBranches, revealPath, startWorkInRepo, switchBranchInRepo } from '@/store/projects'
 
 import { SidebarCount, SidebarRowLead } from '../chrome'
 
@@ -142,6 +143,8 @@ export function WorkspaceMenu({ path, onRemove }: { path: null | string; onRemov
 // "New worktree": prompt for a branch name, then git spins up a fresh worktree
 // for that branch under the repo (the lightest way) and we open a new session
 // inside it. Naming is explicit — no auto-generated `hermes/work-<ts>` trees.
+// The base branch defaults to the remote default (origin/HEAD); the user can
+// pick any local or remote-tracking branch via a filterable combobox.
 export function StartWorkButton({ repoPath, onStarted }: { repoPath: string; onStarted: (path: string) => void }) {
   const { t } = useI18n()
   const s = t.sidebar
@@ -152,6 +155,10 @@ export function StartWorkButton({ repoPath, onStarted }: { repoPath: string; onS
   const [convertMode, setConvertMode] = useState(false)
   const [branches, setBranches] = useState<HermesGitBranch[]>([])
   const [branchesLoading, setBranchesLoading] = useState(false)
+  const [baseBranches, setBaseBranches] = useState<HermesGitBaseBranch[]>([])
+  const [baseBranchesLoading, setBaseBranchesLoading] = useState(false)
+  const [selectedBase, setSelectedBase] = useState<string | undefined>(undefined)
+  const [basePopoverOpen, setBasePopoverOpen] = useState(false)
 
   const loadBranches = useCallback(async () => {
     if (!repoPath) {
@@ -169,6 +176,37 @@ export function StartWorkButton({ repoPath, onStarted }: { repoPath: string; onS
     }
   }, [repoPath])
 
+  const loadBaseBranches = useCallback(async () => {
+    if (!repoPath) {
+      return
+    }
+
+    setBaseBranchesLoading(true)
+
+    try {
+      const list = await listBaseBranches(repoPath)
+      setBaseBranches(list)
+      // Default to the remote default branch (origin/HEAD). If it's missing
+      // (no remote), fall back to the first local branch; if there are none
+      // at all, leave undefined so git branches from HEAD.
+      const remoteDefault = list.find(b => b.isDefault)
+
+      if (remoteDefault) {
+        setSelectedBase(remoteDefault.name)
+      } else {
+        const firstLocal = list.find(b => !b.isRemote)
+
+        if (firstLocal) {
+          setSelectedBase(firstLocal.name)
+        }
+      }
+    } catch {
+      setBaseBranches([])
+    } finally {
+      setBaseBranchesLoading(false)
+    }
+  }, [repoPath])
+
   const submit = async () => {
     const branch = name.trim()
 
@@ -181,7 +219,7 @@ export function StartWorkButton({ repoPath, onStarted }: { repoPath: string; onS
     try {
       // Pass the typed value as both the dir slug source and the branch, so the
       // branch is exactly what the user named (the dir is slugified git-side).
-      const result = await startWorkInRepo(repoPath, { branch, name: branch })
+      const result = await startWorkInRepo(repoPath, { base: selectedBase, branch, name: branch })
 
       if (result) {
         onStarted(result.path)
@@ -230,6 +268,10 @@ export function StartWorkButton({ repoPath, onStarted }: { repoPath: string; onS
     void loadBranches()
   }
 
+  // Resolve the selected base for display: the branch name, or "Current HEAD"
+  // when undefined (git branches from wherever you are).
+  const baseLabel = selectedBase ?? p.baseBranchCurrent
+
   return (
     <>
       <button
@@ -238,6 +280,8 @@ export function StartWorkButton({ repoPath, onStarted }: { repoPath: string; onS
         onClick={() => {
           setConvertMode(false)
           setName('')
+          setSelectedBase(undefined)
+          void loadBaseBranches()
           setOpen(true)
         }}
         type="button"
@@ -278,22 +322,95 @@ export function StartWorkButton({ repoPath, onStarted }: { repoPath: string; onS
               </CommandList>
             </Command>
           ) : (
-            <SanitizedInput
-              autoFocus
-              disabled={pending}
-              onKeyDown={event => {
-                if (event.key === 'Enter') {
-                  event.preventDefault()
-                  void submit()
-                } else if (event.key === 'Escape') {
-                  setOpen(false)
-                }
-              }}
-              onValueChange={setName}
-              placeholder={p.branchPlaceholder}
-              sanitize={gitRef}
-              value={name}
-            />
+            <>
+              {/* Base-branch picker: a Popover + Command combobox with a
+                  filterable list of local and remote-tracking branches.
+                  Defaults to origin/HEAD; "Current HEAD" means no base (git
+                  branches from wherever you are right now). */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-(--ui-text-secondary)">{p.baseBranch}</label>
+                <Popover onOpenChange={setBasePopoverOpen} open={basePopoverOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      className="w-full justify-between font-normal"
+                      disabled={pending || baseBranchesLoading}
+                      variant="outline"
+                    >
+                      <span className="flex min-w-0 items-center gap-1.5">
+                        <Codicon className="shrink-0 text-(--ui-text-tertiary)" name="git-branch" size="0.8rem" />
+                        <span className="truncate">{baseBranchesLoading ? p.baseBranchLoading : baseLabel}</span>
+                      </span>
+                      <Codicon className="shrink-0 text-(--ui-text-tertiary)" name="chevron-down" size="0.75rem" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent align="start" className="w-(--radix-popover-trigger-width) p-0">
+                    <Command
+                      filter={(value, search) => (value.toLowerCase().includes(search.toLowerCase()) ? 1 : 0)}
+                    >
+                      <CommandInput autoFocus placeholder={p.baseBranchPlaceholder} />
+                      <CommandList className="max-h-64">
+                        <CommandEmpty>{p.baseBranchNone}</CommandEmpty>
+                        <CommandGroup>
+                          <CommandItem
+                            onSelect={() => {
+                              setSelectedBase(undefined)
+                              setBasePopoverOpen(false)
+                            }}
+                            value="__head__"
+                          >
+                            <Codicon className="shrink-0 text-(--ui-text-tertiary)" name="git-commit" size="0.8rem" />
+                            <span className="truncate">{p.baseBranchCurrent}</span>
+                            {selectedBase === undefined && (
+                              <Codicon className="ml-auto shrink-0 text-(--ui-accent)" name="check" size="0.8rem" />
+                            )}
+                          </CommandItem>
+                          {baseBranches.map(branch => (
+                            <CommandItem
+                              key={branch.name}
+                              onSelect={() => {
+                                setSelectedBase(branch.name)
+                                setBasePopoverOpen(false)
+                              }}
+                              value={branch.name}
+                            >
+                              <Codicon
+                                className="shrink-0 text-(--ui-text-tertiary)"
+                                name={branch.isRemote ? 'repo' : 'git-branch'}
+                                size="0.8rem"
+                              />
+                              <span className="truncate">{branch.name}</span>
+                              {branch.isDefault && (
+                                <span className="ml-auto shrink-0 text-[0.625rem] text-(--ui-text-tertiary)">★</span>
+                              )}
+                              {selectedBase === branch.name && (
+                                <Codicon className="ml-auto shrink-0 text-(--ui-accent)" name="check" size="0.8rem" />
+                              )}
+                            </CommandItem>
+                          ))}
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
+              </div>
+
+              <SanitizedInput
+                autoFocus
+                disabled={pending}
+                onKeyDown={event => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    void submit()
+                  } else if (event.key === 'Escape') {
+                    setOpen(false)
+                  }
+                }}
+                onValueChange={setName}
+                placeholder={p.branchPlaceholder}
+                sanitize={gitRef}
+                value={name}
+              />
+            </>
           )}
 
           {convertMode ? (

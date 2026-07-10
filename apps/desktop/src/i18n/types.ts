@@ -1302,6 +1302,11 @@ export interface Translations {
       newWorktreeTitle: string
       newWorktreeDesc: string
       branchPlaceholder: string
+      baseBranch: string
+      baseBranchPlaceholder: string
+      baseBranchLoading: string
+      baseBranchNone: string
+      baseBranchCurrent: string
       startWorkFailed: string
       convertBranch: string
       convertBranchTitle: string
