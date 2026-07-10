@@ -5,7 +5,7 @@ on:
   workflow_call:
 
 jobs:
- workspaces:
+  workspaces:
     name: List npm workspaces
     runs-on: ubuntu-latest
     outputs:
@@ -19,8 +19,8 @@ jobs:
 
   check:
     name: Typecheck & Test
-    runs-on: ubuntu-latest
     needs: workspaces
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         package: ${{ fromJson(needs.workspaces.outputs.packages) }}
@@ -36,3 +36,29 @@ jobs:
           # --ignore-scripts: TS & tests don't need native deps
           command: npm ci --ignore-scripts
       - run: npm run --prefix ${{ matrix.package }} check
+
+  lint:
+    # Runs `eslint --fix` so all fixable issues (import sorting, unused imports,
+    # curly braces, etc.) are auto-corrected; eslint exits 0 when everything was
+    # fixable, or non-zero when un-fixable errors remain. Fixable issues are
+    # auto-corrected on merge by desktop-autofix.yml.
+    name: ESLint
+    needs: workspaces
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package: ${{ fromJson(needs.workspaces.outputs.packages) }}
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: ./.github/actions/retry
+        with:
+          command: npm ci --ignore-scripts
+      # --fix: auto-correct fixable issues. Exit code is 0 if all were fixable,
+      # non-zero if un-fixable errors remain. We don't use || true here — the
+      # un-fixable errors SHOULD block merge.
+      - run: npm run --prefix ${{ matrix.package }} lint:fix
